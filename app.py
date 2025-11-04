@@ -1,42 +1,54 @@
 import streamlit as st
 from youtube_transcript_api import YouTubeTranscriptApi
-from pytube import YouTube
 from openai import OpenAI
 import tempfile
+import subprocess
 import os
 import re
 
-# ---- Initialize OpenAI client safely ----
+# ----------------------------
+# ✅ Initialize OpenAI Client
+# ----------------------------
 api_key = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
 if not api_key:
-    st.error("❌ OpenAI API key not found. Please add it in secrets.toml or environment variables.")
+    st.error("❌ OpenAI API key not found. Please add it in secrets.toml or Streamlit Cloud Secrets.")
     st.stop()
 
 client = OpenAI(api_key=api_key)
 
 
-# ---- Helper Functions ----
-def extract_video_id(url):
-    """Extracts the YouTube video ID from a URL."""
+# ----------------------------
+# 🧩 Helper Functions
+# ----------------------------
+def extract_video_id(url: str):
+    """Extract YouTube video ID from a link."""
     video_id = re.findall(r"v=([a-zA-Z0-9_-]{11})", url)
     return video_id[0] if video_id else None
 
 
-def get_transcript(video_id):
-    """Fetch transcript; if unavailable, use Whisper for audio transcription."""
+def get_transcript(video_id: str):
+    """Fetch official transcript; if unavailable, use Whisper via yt-dlp."""
     try:
+        # 1️⃣ Try normal transcript
         transcript = YouTubeTranscriptApi.get_transcript(video_id)
         text = " ".join([t['text'] for t in transcript])
         return text
-    except:
-        st.warning("Transcript not available. Using Whisper to generate one (may take 1–2 minutes)...")
+    except Exception:
+        st.warning("⚠️ Transcript not available. Using Whisper (audio transcription)... This may take 1–2 minutes.")
         try:
-            yt = YouTube(f"https://www.youtube.com/watch?v={video_id}")
-            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-                audio_stream = yt.streams.filter(only_audio=True).first()
-                audio_stream.download(filename=tmp.name)
+            # 2️⃣ Download audio using yt-dlp
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
                 audio_path = tmp.name
+                cmd = [
+                    "yt-dlp",
+                    "-x",
+                    "--audio-format", "mp3",
+                    "-o", audio_path,
+                    f"https://www.youtube.com/watch?v={video_id}"
+                ]
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 
+            # 3️⃣ Transcribe with Whisper
             with open(audio_path, "rb") as audio_file:
                 transcript_data = client.audio.transcriptions.create(
                     model="whisper-1",
@@ -50,8 +62,8 @@ def get_transcript(video_id):
             return None
 
 
-def summarize_text(text, style="short"):
-    """Summarizes text using OpenAI GPT."""
+def summarize_text(text: str, style="short"):
+    """Summarize the transcript using GPT."""
     if style == "short":
         prompt = f"Summarize this YouTube transcript in 3-4 sentences:\n{text}"
     elif style == "medium":
@@ -70,13 +82,15 @@ def summarize_text(text, style="short"):
     return response.choices[0].message.content.strip()
 
 
-# ---- Streamlit UI ----
+# ----------------------------
+# 🎨 Streamlit Interface
+# ----------------------------
 st.set_page_config(page_title="YouTube Video Summarizer", page_icon="🎥", layout="centered")
 
 st.title("🎬 YouTube Video Summarizer")
-st.markdown("Enter a **YouTube video URL** and get an AI-generated summary automatically!")
+st.markdown("Paste a YouTube video link below — the app will fetch or generate a transcript and summarize it using AI!")
 
-url = st.text_input("Paste YouTube Video Link Here:")
+url = st.text_input("🔗 Enter YouTube Video URL:")
 
 if url:
     video_id = extract_video_id(url)
@@ -88,15 +102,23 @@ if url:
 
         if transcript:
             st.success("✅ Transcript ready!")
-            with st.expander("📄 Show Full Transcript"):
+            with st.expander("📄 View Transcript"):
                 st.write(transcript)
 
-            summary_type = st.radio("🧠 Choose summary style:", ["Short", "Medium", "Detailed"])
+            summary_type = st.radio("🧠 Choose summary length:", ["Short", "Medium", "Detailed"])
 
-            if st.button("Generate Summary"):
+            if st.button("✨ Generate Summary"):
                 with st.spinner("Generating summary..."):
                     summary = summarize_text(transcript, style=summary_type.lower())
-                st.subheader("📜 AI Summary:")
+                st.subheader("📜 AI Summary")
                 st.write(summary)
+
+                # Optional: Download summary
+                st.download_button(
+                    label="⬇️ Download Summary as TXT",
+                    data=summary,
+                    file_name="youtube_summary.txt",
+                    mime="text/plain"
+                )
         else:
-            st.error("Could not fetch or generate transcript.")
+            st.error("❌ Could not fetch or generate transcript.")

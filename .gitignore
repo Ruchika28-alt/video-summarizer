@@ -1,0 +1,10 @@
+# Ignore system files
+__pycache__/
+*.pyc
+
+# Streamlit secrets (do NOT upload API keys)
+.streamlit/secrets.toml
+
+# Virtual environments
+venv/
+.env/
